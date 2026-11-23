@@ -74,6 +74,26 @@ class EnginesTest {
         assertTrue(t.startPct[off72] > 95.0)
     }
 
+    private fun pre(a: String, b: String, eq: Double, pot: Double, call: Double, pos: Int, stack: Double, range: Int = 30): String {
+        val h = cs(a, b)
+        val idx = PreflopTable.classIndex(h[0], h[1])
+        val ctx = com.vibe.oddslab.poker.PokerAnalysis.Ctx(
+            true, PreflopTable.table.endPct[idx], PreflopTable.className(idx), pos, stack, 10.0, range, h,
+        )
+        return com.vibe.oddslab.poker.PokerAnalysis.decide(eq, 1, pot, call, ctx).verdict
+    }
+
+    @Test fun preflopAdvice() {
+        assertEquals("РЕЙЗ", pre("As", "Kd", 0.65, 0.0, 0.0, 0, 1000.0))
+        assertEquals("ПАС", pre("Ks", "9d", 0.58, 0.0, 0.0, 0, 1000.0))
+        assertEquals("РЕЙЗ", pre("Ks", "9d", 0.58, 0.0, 0.0, 2, 1000.0))
+        assertEquals("ЧЕК", pre("7s", "2d", 0.35, 15.0, 0.0, 4, 1000.0))
+        assertEquals("ВА-БАНК", pre("As", "5d", 0.55, 0.0, 5.0, 3, 80.0))
+        assertEquals("3-БЕТ", pre("Qs", "Qd", 0.8, 45.0, 30.0, 1, 1000.0))
+        assertEquals("ПАС", pre("Js", "8d", 0.38, 45.0, 30.0, 2, 1000.0))
+        assertEquals("КОЛЛ", pre("8s", "7s", 0.38, 45.0, 30.0, 2, 1000.0))
+    }
+
     private val rules = BjRules(decks = 6, h17 = false, das = true, surrender = false)
 
     private fun best(player: List<Int>, up: Int, r: BjRules = rules): BjAction {

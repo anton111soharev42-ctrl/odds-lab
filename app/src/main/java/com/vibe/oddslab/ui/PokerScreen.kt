@@ -101,25 +101,47 @@ fun PokerScreen(st: PokerState) {
                 color = Dim, fontSize = 11.sp, modifier = Modifier.padding(top = 4.dp),
             )
             Spacer(Modifier.height(8.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(
-                    st.pot, { st.pot = it.filter { c -> c.isDigit() || c == '.' || c == ',' } },
-                    Modifier.weight(1f), label = { Text("Банк сейчас") }, singleLine = true,
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                )
-                OutlinedTextField(
-                    st.toCall, { st.toCall = it.filter { c -> c.isDigit() || c == '.' || c == ',' } },
-                    Modifier.weight(1f), label = { Text("Нужно доставить") }, singleLine = true,
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                )
+            Text("Твоя позиция", color = Dim, fontSize = 12.sp)
+            Spacer(Modifier.height(4.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                PokerAnalysis.POSITIONS.forEachIndexed { i, p ->
+                    PickButton(p.name, Modifier.weight(1f), selected = st.position == i, fontSize = 12.sp, height = 40.dp) { st.position = i }
+                }
             }
-            Text("Банк — вместе со ставкой соперника.", color = Dim, fontSize = 11.sp)
+            Text(
+                "Ранняя — первые 3 места после блайндов, средняя — следующие, поздняя — CO и баттон (дилер).",
+                color = Dim, fontSize = 11.sp, modifier = Modifier.padding(top = 4.dp),
+            )
+            Spacer(Modifier.height(8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                NumField("Твой стек", st.stack, Modifier.weight(1f)) { st.stack = it }
+                NumField("Большой блайнд", st.bb, Modifier.weight(1f)) { st.bb = it }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                NumField("Банк сейчас", st.pot, Modifier.weight(1f)) { st.pot = it }
+                NumField("Нужно доставить", st.toCall, Modifier.weight(1f)) { st.toCall = it }
+            }
+            Text(
+                "Банк — вместе с блайндами и ставками соперников. «Нужно доставить» — сколько добавить, чтобы уравнять (0 — если ставок нет).",
+                color = Dim, fontSize = 11.sp,
+            )
         }
 
         PokerResults(st)
         Spacer(Modifier.height(16.dp))
     }
 }
+
+@Composable
+private fun NumField(label: String, value: String, modifier: Modifier, onChange: (String) -> Unit) {
+    OutlinedTextField(
+        value, { onChange(it.filter { c -> c.isDigit() || c == '.' || c == ',' }) },
+        modifier, label = { Text(label, fontSize = 12.sp) }, singleLine = true,
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+    )
+}
+
+private fun num(s: String) = s.replace(',', '.').toDoubleOrNull() ?: 0.0
 
 private fun onSlotTap(st: PokerState, i: Int) {
     if (st.selected == i && st.slots[i] != null) st.clearSelected() else st.selected = i
@@ -234,16 +256,24 @@ private fun PokerResults(st: PokerState) {
         }
     }
 
+    val h0 = st.slots[0] ?: 0
+    val h1 = st.slots[1] ?: 0
     val d = PokerAnalysis.decide(
-        e.equity, st.opponents,
-        st.pot.replace(',', '.').toDoubleOrNull() ?: 0.0,
-        st.toCall.replace(',', '.').toDoubleOrNull() ?: 0.0,
+        e.equity, st.opponents, num(st.pot), num(st.toCall),
+        PokerAnalysis.Ctx(
+            preflop = board == 0, top = r.preflopTopPct, cls = r.preflopClass, pos = st.position,
+            stack = num(st.stack), bb = num(st.bb), range = st.rangePct, hero = intArrayOf(h0, h1),
+        ),
     )
+    val noBlindHint = board == 0 && num(st.bb) <= 0
     Section("Решение") {
         val c = when (d.color) { PokerAnalysis.GOOD -> Good; PokerAnalysis.MID -> Gold; else -> Bad }
         Text(d.verdict, color = c, fontSize = 28.sp, fontWeight = FontWeight.Black)
         Spacer(Modifier.height(4.dp))
         d.lines.forEach { Text("• $it", color = TextMain, fontSize = 13.sp, modifier = Modifier.padding(vertical = 1.dp)) }
+        if (noBlindHint) {
+            Text("• Введи большой блайнд (и стек) — дам префлоп-совет с учётом позиции: рейз, колл, пуш или пас.", color = Gold, fontSize = 13.sp)
+        }
     }
 
     if (r.outsHitByRiver != null) {

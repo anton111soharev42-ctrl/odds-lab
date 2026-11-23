@@ -257,31 +257,154 @@ async function analyzePoker(hero, board, opps, rangePct, isStale) {
   return out;
 }
 
-function pokerDecision(eq, opps, pot, toCall) {
+/* Positions: open = open-raise range (top % of hands), push = all-in range at 10 BB (top %). */
+const POSITIONS = [
+  { name: 'Ранняя', full: 'ранней позиции', open: 14, push: 13, ip: true },
+  { name: 'Средняя', full: 'средней позиции', open: 20, push: 18, ip: true },
+  { name: 'Поздняя', full: 'поздней позиции (CO/баттон)', open: 38, push: 32, ip: true },
+  { name: 'МБ', full: 'малого блайнда', open: 35, push: 45, ip: false },
+  { name: 'ББ', full: 'большого блайнда', open: 0, push: 50, ip: false },
+];
+
+const _P = x => (x * 100).toFixed(1) + '%';
+const _num = x => { const a = Math.abs(x); return Math.abs(a - Math.round(a)) < 1e-9 ? a.toFixed(0) : a.toFixed(2); };
+const _sg = x => (x >= 0 ? '+' : '−');
+
+/**
+ * ctx: { preflop, top (hero hand top-% or null), cls, pos (0..4), stack, bb, range }
+ * pot = pot before hero acts (incl. opponents' bets), toCall = amount hero must add.
+ */
+function pokerDecision(eq, opps, pot, toCall, ctx = {}) {
+  const bb = ctx.bb > 0 ? ctx.bb : 0;
+  if (ctx.preflop && bb > 0 && ctx.top != null) return preflopDecision(eq, opps, pot, toCall, ctx);
+  const stack = ctx.stack > 0 ? ctx.stack : 0;
+  const chips = x => _num(x) + (bb > 0 ? ` (${(x / bb).toFixed(1)} ББ)` : '');
   const fair = 1 / (opps + 1);
-  const P = x => (x * 100).toFixed(1) + '%';
-  const num = x => { const a = Math.abs(x); return Math.abs(a - Math.round(a)) < 1e-9 ? a.toFixed(0) : a.toFixed(2); };
-  const sg = x => (x >= 0 ? '+' : '−');
-  const lines = [`Средняя доля банка при ${opps + 1} игроках: ${P(fair)}. У тебя ${P(eq)} (×${(eq / fair).toFixed(2)}).`];
+  const lines = [`Средняя доля банка при ${opps + 1} игроках: ${_P(fair)}. У тебя ${_P(eq)} (×${(eq / fair).toFixed(2)}).`];
+  if (stack > 0 && pot > 0) lines.push(`SPR (стек ÷ банк): ${(stack / pot).toFixed(1)}${stack / pot <= 2.5 ? ' — низкий: с хорошей рукой ты уже «привязан» к банку.' : ''}`);
   if (toCall > 0 && pot > 0) {
-    const need = toCall / (pot + toCall), ev = eq * (pot + toCall) - toCall;
-    lines.push(`Шансы банка: вкладываешь ${num(toCall)} в итоговый банк ${num(pot + toCall)} → нужно ≥ ${P(need)} эквити.`);
-    lines.push(`EV колла: ${sg(ev)}${num(ev)} фишек (${sg(ev)}${Math.abs((ev / toCall) * 100).toFixed(0)}% от колла).`);
+    const call = stack > 0 ? Math.min(toCall, stack) : toCall;
+    const allIn = stack > 0 && call >= stack;
+    const need = call / (pot + call), ev = eq * (pot + call) - call;
+    lines.push(`Шансы банка: вкладываешь ${chips(call)} в итоговый банк ${chips(pot + call)} → нужно ≥ ${_P(need)} эквити.`);
+    if (allIn) lines.push(`Колл = весь твой стек (${chips(stack)}).`);
+    lines.push(`EV колла: ${_sg(ev)}${_num(ev)} фишек (${_sg(ev)}${Math.abs((ev / call) * 100).toFixed(0)}% от колла).`);
     if (ev > 0) {
-      if (eq >= 0.5 && eq >= 1.8 * fair) { lines.push('Эквити сильно выше нужного — выгоднее повышать (рейз), чтобы соперники платили больше.'); return { verdict: 'РЕЙЗ', tone: 'good', lines }; }
-      lines.push(`Запас по эквити: +${P(eq - need)} к минимально нужному.`);
-      return { verdict: 'КОЛЛ', tone: 'good', lines };
+      if (eq >= 0.5 && eq >= 1.8 * fair && !allIn) {
+        const r = toCall * 3 + pot;
+        if (stack > 0 && r >= stack * 0.6) { lines.push(`Рейз почти на весь стек — проще сразу ва-банк (${chips(stack)}).`); return { verdict: 'ВА-БАНК', tone: 'good', lines }; }
+        lines.push(`Эквити сильно выше нужного — выгоднее повышать, чтобы соперники платили больше. Рейз ≈ до ${chips(r)}.`);
+        return { verdict: 'РЕЙЗ', tone: 'good', lines };
+      }
+      lines.push(`Запас по эквити: +${_P(eq - need)} к минимально нужному.`);
+      return { verdict: allIn ? 'КОЛЛ ВА-БАНК' : 'КОЛЛ', tone: 'good', lines };
     }
-    const implied = toCall / eq - pot - toCall;
-    lines.push(`Не хватает ${P(need - eq)} эквити.`);
-    if (eq > 0 && isFinite(implied)) lines.push(`Колл окупится, только если на следующих улицах добрать ещё ≥ ${num(implied)} фишек (implied odds).`);
+    const implied = call / eq - pot - call;
+    lines.push(`Не хватает ${_P(need - eq)} эквити.`);
+    if (!allIn && eq > 0 && isFinite(implied)) {
+      lines.push(`Колл окупится, только если на следующих улицах добрать ещё ≥ ${chips(implied)} (implied odds)${stack > 0 && implied > stack - call ? ' — а у тебя за спиной меньше, так что точно пас.' : '.'}`);
+    }
     return { verdict: 'ПАС', tone: 'bad', lines };
   }
-  lines.push('Введи банк и сумму колла — посчитаю точное EV решения.');
-  if (eq >= 0.5 && eq >= 1.6 * fair) { lines.push('Ты фаворит раздачи: ставь на вэлью (≈ ½–¾ банка).'); return { verdict: 'СТАВКА / РЕЙЗ', tone: 'good', lines }; }
-  if (eq >= fair) { lines.push('Выше среднего, но не доминируешь: чек или небольшая ставка, на крупную ставку — сверяйся с шансами банка.'); return { verdict: 'ЧЕК / КОЛЛ', tone: 'mid', lines }; }
-  lines.push('Ниже средней доли: чек, а на ставку — пас, если шансы банка не позволяют колл.');
+  if (pot <= 0) lines.push('Введи банк (и сумму колла, если против тебя ставка) — посчитаю точное EV решения и размеры ставок.');
+  if (eq >= 0.5 && eq >= 1.6 * fair) {
+    if (pot > 0 && stack > 0 && stack / pot <= 2.5) { lines.push(`Ты фаворит при низком SPR — ставь ва-банк (${chips(stack)}).`); return { verdict: 'ВА-БАНК', tone: 'good', lines }; }
+    lines.push(pot > 0 ? `Ты фаворит раздачи: ставь на вэлью ½–¾ банка = ${chips(pot * 0.5)} – ${chips(pot * 0.75)}.` : 'Ты фаворит раздачи: ставь на вэлью ½–¾ банка.');
+    return { verdict: 'СТАВКА', tone: 'good', lines };
+  }
+  if (eq >= fair) {
+    lines.push(pot > 0 ? `Выше среднего, но не доминируешь: чек или небольшая ставка ⅓ банка = ${chips(pot / 3)}.` : 'Выше среднего, но не доминируешь: чек или небольшая ставка.');
+    return { verdict: 'ЧЕК', tone: 'mid', lines };
+  }
+  lines.push('Ниже средней доли: чек, а на ставку соперника — пас, если шансы банка не позволяют колл.');
   return { verdict: 'ЧЕК / ПАС', tone: 'bad', lines };
+}
+
+function preflopDecision(eq, opps, pot, toCall, ctx) {
+  const bb = ctx.bb, p = POSITIONS[ctx.pos] || POSITIONS[0], top = ctx.top;
+  const stack = ctx.stack > 0 ? ctx.stack : 100 * bb;
+  const sBB = stack / bb;
+  const chips = x => `${_num(x)} (${(x / bb).toFixed(1)} ББ)`;
+  const posted = ctx.pos === 4 ? bb : ctx.pos === 3 ? bb / 2 : 0;
+  const facingRaise = toCall > bb - posted + bb * 0.01;
+  const potEff = pot > 0 ? pot : 1.5 * bb + (facingRaise ? toCall + posted : 0);
+  const limpers = !facingRaise && pot > 0 ? Math.max(0, Math.round((pot - 1.5 * bb) / bb)) : 0;
+  const lines = [
+    `Рука ${ctx.cls}: топ ${top.toFixed(1)}% стартовых рук. Стек: ${chips(stack)}${ctx.stack > 0 ? '' : ' — не задан, считаю 100 ББ'}.`,
+  ];
+  if (pot <= 0) lines.push(`Банк не введён — оцениваю в ${chips(potEff)}.`);
+  const res = (verdict, tone, extra) => { if (extra) lines.push(extra); return { verdict, tone, lines }; };
+
+  /* ---------- Short stack: push / fold ---------- */
+  if (sBB <= 15) {
+    lines.push(`Короткий стек (≤ 15 ББ): играем только «ва-банк или пас» — так соперники не могут тебя пережать.`);
+    if (!facingRaise) {
+      const pushPct = Math.max(4, Math.min(90, p.push * Math.pow(10 / sBB, 0.6)));
+      lines.push(`С ${p.full} при ${sBB.toFixed(1)} ББ пушим топ ${pushPct.toFixed(0)}% рук.`);
+      if (top <= pushPct) return res('ВА-БАНК', 'good', `Ставь весь стек: ${chips(stack)}.`);
+      if (ctx.pos === 4 && toCall <= 0) return res('ЧЕК', 'mid', 'Ты на большом блайнде и платить не нужно — бесплатно смотришь флоп.');
+      return res('ПАС', 'bad', 'Рука слабее диапазона пуша.');
+    }
+    const call = Math.min(toCall, stack), need = call / (potEff + call);
+    lines.push(`Нужно доставить ${chips(call)} в банк ${chips(potEff + call)} → нужно ≥ ${_P(need)} эквити, у тебя ${_P(eq)}.`);
+    if (ctx.range >= 100) lines.push('⚠ Против рейза выбери диапазон соперника «Топ 15–30%» — против «любых» рук эквити завышено.');
+    if (top <= 7) return res('ВА-БАНК', 'good', `Сильнейшая рука — пушим весь стек ${chips(stack)} поверх рейза.`);
+    if (eq >= need) return res(call >= stack ? 'КОЛЛ ВА-БАНК' : 'ВА-БАНК', 'good', `EV ${_sg(eq * (potEff + call) - call)}${_num(eq * (potEff + call) - call)} фишек.`);
+    return res('ПАС', 'bad', `Не хватает ${_P(need - eq)} эквити.`);
+  }
+
+  /* ---------- Deep stack, nobody raised ---------- */
+  if (!facingRaise) {
+    if (ctx.pos === 4) {
+      if (top <= 12) {
+        const to = Math.min(stack, (3.5 + limpers) * bb);
+        return res('РЕЙЗ', 'good', `Сильная рука на ББ — повышай до ${chips(to)}, наказывая лимперов.`);
+      }
+      return res('ЧЕК', 'mid', 'Ты на большом блайнде, рейза не было — чекай и смотри флоп бесплатно.');
+    }
+    const size = (ctx.pos === 3 ? 3 : 2.5) + limpers;
+    const to = Math.min(stack, size * bb);
+    lines.push(`С ${p.full} открываемся рейзом с топ ${p.open}% рук.${limpers ? ` Лимперов перед тобой: ${limpers} — +1 ББ к рейзу за каждого.` : ''}`);
+    if (top <= p.open) return res('РЕЙЗ', 'good', `Рейз до ${chips(to)}. Лимп (просто колл ББ) хуже — теряешь инициативу.`);
+    if (limpers > 0 && top <= p.open * 1.7 && sBB >= 40) {
+      return res('КОЛЛ', 'mid', `Есть лимперы и глубокий стек — можно дёшево войти (${chips(bb - posted)}) ради сета/флеша/стрита. Без попадания на флопе — сбрасывай.`);
+    }
+    return res('ПАС', 'bad', 'Рука вне диапазона открытия с этой позиции.');
+  }
+
+  /* ---------- Deep stack, facing a raise ---------- */
+  const call = Math.min(toCall, stack);
+  const need = call / (potEff + call);
+  const raiseTo = toCall + posted;
+  const raiseBB = raiseTo / bb;
+  const threeBet = raiseBB <= 4 ? 5 : raiseBB <= 8 ? 3.5 : 2.5;
+  lines.push(`Против рейза до ${chips(raiseTo)}: доставить ${chips(call)} в банк ${chips(potEff + call)} → нужно ≥ ${_P(need)} эквити, у тебя ${_P(eq)}.`);
+  if (ctx.range >= 100) lines.push('⚠ Тот, кто рейзит, держит не «любые» руки — выбери диапазон «Топ 15–30%», чтобы эквити было честным.');
+  if (call >= stack * 0.4) {
+    if (top <= threeBet + 2 || eq >= need) return res(call >= stack ? 'КОЛЛ ВА-БАНК' : 'ВА-БАНК', 'good', 'Колл съедает большую часть стека — играем сразу весь стек.');
+    return res('ПАС', 'bad', `Не хватает ${_P(need - eq)} эквити, а на кону почти весь стек.`);
+  }
+  if (top <= threeBet) {
+    const to = raiseTo * (p.ip ? 3 : 3.7);
+    if (to >= stack * 0.4) return res('ВА-БАНК', 'good', `Топ ${threeBet}% рук: ре-рейз почти на весь стек — ставь сразу ${chips(stack)}.`);
+    return res('3-БЕТ', 'good', `Топ ${threeBet}% рук: ре-рейз до ${chips(to)}${p.ip ? ' (×3 от рейза)' : ' (из блайндов ×3.5–4 от рейза)'}.`);
+  }
+  if (eq >= need && top <= 22) return res('КОЛЛ', 'good', 'Рука в диапазоне колла, и колл выгоден уже по прямым шансам банка.');
+  // Speculative hands (pairs, suited connectors / suited aces) are paid by implied odds when stacks are deep.
+  const h = ctx.hero || [];
+  let spec = '';
+  if (h.length === 2) {
+    const r1 = rankOf(h[0]), r2 = rankOf(h[1]), suited = suitOf(h[0]) === suitOf(h[1]);
+    const gap = Math.abs(r1 - r2);
+    if (r1 === r2) spec = 'карманная пара — ловим сет (≈ 12% на флопе)';
+    else if (suited && (gap <= 2 || Math.max(r1, r2) === 12)) spec = 'одномастная рука — ловим флеш/стрит';
+  }
+  if (spec) {
+    const ratio = (stack - call) / call;
+    lines.push(`${spec[0].toUpperCase() + spec.slice(1)}. За спиной ${ratio.toFixed(0)}× колла${ratio >= 15 ? ' — достаточно для implied odds (нужно ≥ 15×).' : ' — мало, нужно ≥ 15×.'}`);
+    if (ratio >= 15) return res('КОЛЛ', 'mid', 'Колл ради сильного попадания. Без сета/дро на флопе — сбрасывай на ставку.');
+  }
+  return res('ПАС', 'bad', eq < need ? `Не хватает ${_P(need - eq)} эквити, а рука не тянет на implied odds.` : 'Рука слабовата против рейза: часто будешь доминирован (тот же туз/король с худшим кикером).');
 }
 
 /* ---------------- Blackjack ---------------- */

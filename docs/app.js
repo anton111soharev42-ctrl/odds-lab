@@ -5,14 +5,19 @@ const KEY = 'oddslab.v1';
 function defaults() {
   return {
     tab: 0,
-    poker: { slots: [null, null, null, null, null, null, null], sel: 0, pr: null, ps: null, opps: 1, range: 100, pot: '', call: '' },
+    poker: { slots: [null, null, null, null, null, null, null], sel: 0, pr: null, ps: null, opps: 1, range: 100, pot: '', call: '', stack: '', bb: '', pos: 2 },
     bj: { rules: { decks: 6, h17: false, das: true, surrender: true, bjPayout: 1.5, peek: true }, player: [], up: null, toDealer: false, useCounter: true, rulesOpen: false },
     seen: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
     history: [],
   };
 }
 let S;
-try { S = Object.assign(defaults(), JSON.parse(localStorage.getItem(KEY) || 'null') || {}); } catch (e) { S = defaults(); }
+try {
+  const saved = JSON.parse(localStorage.getItem(KEY) || 'null') || {};
+  const d = defaults();
+  S = Object.assign(d, saved);
+  S.poker = Object.assign(defaults().poker, saved.poker || {});
+} catch (e) { S = defaults(); }
 function save() { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) { /* private mode */ } }
 
 const main = document.getElementById('main');
@@ -87,14 +92,19 @@ function renderPoker() {
     <div class="lbl" style="margin-top:10px">Какие руки у соперников</div>
     <div class="grid g4">${[[100, 'Любые'], [50, 'Топ 50%'], [30, 'Топ 30%'], [15, 'Топ 15%']].map(([v, l]) => `<button class="btn small${p.range === v ? ' on' : ''}" data-act="range" data-v="${v}">${l}</button>`).join('')}</div>
     <div class="hint">Кто доставляет ставки, обычно держит руки сильнее случайных — сужай диапазон против тайтовых игроков.</div>
+    <div class="lbl" style="margin-top:10px">Твоя позиция</div>
+    <div class="grid g5">${POSITIONS.map((x, i) => `<button class="btn small${p.pos === i ? ' on' : ''}" data-act="pos" data-v="${i}">${x.name}</button>`).join('')}</div>
+    <div class="hint">Ранняя — первые 3 места после блайндов, средняя — следующие, поздняя — CO и баттон (дилер).</div>
     <div class="inputs">
+      <label>Твой стек<input id="stack" inputmode="decimal" value="${p.stack}" placeholder="фишек"></label>
+      <label>Большой блайнд<input id="bb" inputmode="decimal" value="${p.bb}" placeholder="ББ"></label>
       <label>Банк сейчас<input id="pot" inputmode="decimal" value="${p.pot}" placeholder="0"></label>
       <label>Нужно доставить<input id="call" inputmode="decimal" value="${p.call}" placeholder="0"></label>
     </div>
-    <div class="hint">Банк — вместе со ставкой соперника.</div>
+    <div class="hint">Банк — вместе с блайндами и ставками соперников. «Нужно доставить» — сколько добавить, чтобы уравнять (0 — если ставок нет).</div>
   </section>
   <div id="pres"></div>`;
-  for (const id of ['pot', 'call']) {
+  for (const id of ['stack', 'bb', 'pot', 'call']) {
     document.getElementById(id).addEventListener('input', (e) => {
       const v = e.target.value.replace(/[^0-9.,]/g, '');
       if (v !== e.target.value) e.target.value = v;
@@ -113,7 +123,10 @@ function renderPokerResults() {
   if (!r) { el.innerHTML = `<section class="panel dimc"><span class="spin"></span> Считаю…</section>`; return; }
   const e = r.equity;
   const num = s => parseFloat(String(s).replace(',', '.')) || 0;
-  const d = pokerDecision(e.equity, p.opps, num(p.pot), num(p.call));
+  const d = pokerDecision(e.equity, p.opps, num(p.pot), num(p.call), {
+    preflop: nb === 0, top: r.preflopTop, cls: r.preflopClass, pos: p.pos, hero: [p.slots[0], p.slots[1]], stack: num(p.stack), bb: num(p.bb), range: p.range,
+  });
+  if (nb === 0 && !(num(p.bb) > 0)) d.lines.push('Введи большой блайнд (и стек) — дам префлоп-совет с учётом позиции: рейз, колл, пуш или пас.');
   let h = `<section class="panel"><div class="title">Шансы ${computing ? '<span class="spin"></span>' : ''}</div>
     <div class="big">${P(e.equity)}</div><div class="hint" style="margin:0 0 8px">эквити — твоя доля банка в среднем</div>
     ${bar('Выигрыш', e.win, P(e.win), C.good)}${bar('Делёж', e.tie, P(e.tie), C.gold)}${bar('Проигрыш', e.lose, P(e.lose), C.bad)}
@@ -287,6 +300,7 @@ document.addEventListener('click', (e) => {
     case 'pboard': for (let i = 2; i < 7; i++) p.slots[i] = null; p.sel = 2; schedulePoker(); break;
     case 'opp': p.opps = Math.max(1, Math.min(9, p.opps + v)); schedulePoker(); break;
     case 'range': p.range = v; schedulePoker(); break;
+    case 'pos': p.pos = v; break;
     case 'rulesOpen': b.rulesOpen = !b.rulesOpen; break;
     case 'decks': b.rules.decks = v; break;
     case 'r_h17': b.rules.h17 = !b.rules.h17; break;

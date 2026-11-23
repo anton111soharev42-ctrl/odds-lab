@@ -20,6 +20,9 @@ class PokerState {
     var rangePct by mutableIntStateOf(100)
     var pot by mutableStateOf("")
     var toCall by mutableStateOf("")
+    var stack by mutableStateOf("")
+    var bb by mutableStateOf("")
+    var position by mutableIntStateOf(2)
     var result by mutableStateOf<PokerOutcome?>(null)
     var computing by mutableStateOf(false)
 
@@ -39,7 +42,6 @@ class PokerState {
         selected = 0; pendingRank = null; pendingSuit = null; result = null
     }
 
-    fun clearBoardKeepNothing() = clearAll()
 }
 
 class BjState {
